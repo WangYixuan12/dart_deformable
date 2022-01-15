@@ -175,10 +175,10 @@ class indi_pt_tracker:
         if depth_np is not None:
             occl_map = depth_np < 2000.0
             occl_dist = skfmm.distance(~occl_map, dx = 1)
-            sigma = 60.
-#                 self.occl_w_map = 1-np.exp(-occl_dist/sigma)
+            sigma = 30.
+#             self.occl_w_map = 1-np.exp(-occl_dist/sigma)
             self.occl_w_map = np.zeros_like(occl_dist)
-            self.occl_w_map[occl_dist<=sigma] = -1.0
+            self.occl_w_map[occl_dist<=sigma] = 0.0
             self.occl_w_map[occl_dist>sigma] = 1.0
         else:
             self.occl_w_map = np.ones_like(mask).astype(float)
@@ -254,13 +254,14 @@ class indi_pt_tracker:
         Input: p: numpy array, (2*Np,)
         '''
 #         ratio = np.array(self.mask.nonzero()).shape[1]/(5.0*p.shape[0])
+        if self.debug:
+            print('---- In Obj Fn ----')
         ratio = self.ratio
         l_obs = self.obs_obj_fn(p)
         p = jnp.array(p.reshape(-1, 2))
         l_model = self.model_obj_fn(p)
         loss = l_obs+ratio*l_model
         if self.debug:
-            print('---- In Obj Fn ----')
             print('p:')
             self.vis(p=np.array(p).astype(int))
             print('l_obs:')
@@ -285,19 +286,24 @@ class indi_pt_tracker:
             loss += 0.5*self.lam*np.sum(np.square(ang[:-1]-ang[1:]))
         p = p.astype(int)
         p = self.hard_constrain(p)
-        loss += 0.5*np.sum(np.square(self.occl_w_obs[:,None]*self.dist[p[:,0], p[:,1]]))
+        loss += 0.5*np.sum( np.square(self.occl_w_obs*self.dist[p[:,0], p[:,1]]) )
 #         loss += np.sum(self.occl_w_obs[:,None]*self.dist[p[:,0], p[:,1]])
         
         if self.debug:
+            print('distance:')
+            print(self.occl_w_obs*self.dist[p[:,0], p[:,1]])
+            print('square distance:')
+            a = np.square(self.occl_w_obs*self.dist[p[:,0], p[:,1]])
+            print(a)
             print('loss of distance:')
-            print(0.5*np.sum(np.square(self.occl_w_obs[:,None]*self.dist[p[:,0], p[:,1]])))
+            print(0.5*np.sum( np.square(self.occl_w_obs*self.dist[p[:,0], p[:,1]]) ))
             if self.reg:
                 print('ang:')
                 print(ang)
                 print('loss of angle:')
                 print(0.5*self.lam*np.sum(np.square(ang[:-1]-ang[1:])))
-#             print('loss value:')
-#             print(loss)
+            print('obs value:')
+            print(loss)
         return loss
     
     def model_obj_fn(self, p):
@@ -345,13 +351,14 @@ class indi_pt_tracker:
         Input: p: numpy array, (2*Np,)
         '''
 #         ratio = np.array(self.mask.nonzero()).shape[1]/(5.0*p.shape[0])
+        if self.debug:
+            print('---- In Jac Fn ----')
         ratio = self.ratio
         J_obs = self.obs_jac_fn(p)
         p = jnp.array(p.reshape(-1, 2))
         J_model = np.array(self.model_jac_fn_jax(p)).reshape(-1)
         J = J_obs + ratio*J_model
         if self.debug:
-            print('---- In Jac Fn ----')
             print('p:')
             self.vis(p=np.array(p).astype(int))
             print('J:')
@@ -382,7 +389,7 @@ class indi_pt_tracker:
 #             J_ang[:-1,0] += -self.lam*np.sign(d_ang)*dx/l
 #             J_ang[:-1,1] += self.lam*np.sign(d_ang)*dy/l
             ang = self.p2ang(p)
-            d_ang = ang[:-1] - ang[1:]
+            d_ang = ang[1:] - ang[:-1]
             J_ang[0:-2, 0] += self.lam*d_ang*dx[0:-1]/l[0:-1]
             J_ang[0:-2, 1] += -self.lam*d_ang*dy[0:-1]/l[0:-1]
             J_ang[1:-1, 0] += -self.lam*d_ang*(dx[0:-1]/l[0:-1]+dx[1:]/l[1:])
@@ -398,11 +405,11 @@ class indi_pt_tracker:
         J_D[:, 0] = self.occl_w_obs*self.dist_y[p[:, 0], p[:, 1]]
         J_D = (self.dist[p[:, 0], p[:, 1]]*self.occl_w_obs)[:,None]*J_D
         
-#         if self.debug:
-#             print('Distance Jacobian:')
-#             print(J_D)
-#             print('Angle Jacobian:')
-#             print(J_ang)
+        if self.debug:
+            print('Distance Jacobian:')
+            print(J_D)
+            print('Angle Jacobian:')
+            print(J_ang)
         return ((J_D+J_ang).reshape(-1))
     
     '''
@@ -515,6 +522,10 @@ class indi_pt_tracker:
         p_mean = (0.5*(self.p[:-1] + self.p[1:])).astype(int)
         self.occl_w = self.occl_w_map[p_mean[:, 0], p_mean[:, 1]]
         self.occl_w_obs = self.occl_w_map[self.p[:, 0].astype(int), self.p[:, 1].astype(int)]
+        # TEST ONLY
+        self.occl_w_obs = np.ones(self.p.shape[0])
+        self.occl_w_obs[-1] = 0
+        self.occl_w_obs[-2] = 0
         print("model-based occlusion weight:")
         print(self.occl_w)
         print("observation-based occlusion weight:")
@@ -562,8 +573,55 @@ mask = np.zeros((H, W), dtype=bool)
 mask[200:205, 200:400] = True
 simple_tracker.set_obs(mask, subsample=True)
 # simple_tracker.trans_step()
-simple_tracker.step(debug=False)
+simple_tracker.step(debug=True)
 simple_tracker.vis()
+```
+
+```python
+# simple rope tracking for LSLQP with reg
+H = 540
+W = 810
+l = 20
+simple_tracker_sub = indi_pt_tracker(H, W, l, reg=True, ratio=0)
+p = np.zeros((19,2))
+p[:,0] = 10
+p[:,1] = np.arange(40, 401, l)
+simple_tracker_sub.set_init(p)
+data_path = "/home/yixuan/dart_deformable/data/rope_simple/"
+for i in range(251):
+    rgb_np = exr_to_np(data_path+"rgb_"+'{0:03d}'.format(i)+".exr")
+    mask = rgb_np[:, :, 2] > 100
+    simple_tracker_sub.set_obs(mask, rgb_np, subsample=True)
+    start = time.time()
+    simple_tracker_sub.step(debug=False)
+    print("one iteration takes:", time.time()-start)
+    simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_obj_loss_19/", idx=i)
+```
+
+```python
+# simple occlusion for LSLQP with obs-based obj fn + reg
+H = 540
+W = 810
+l = 20
+simple_tracker_sub = indi_pt_tracker(H, W, l, debug=False,ratio=0.0, reg=True)
+p = np.zeros((19,2))
+p[:,0] = 275
+p[:,1] = np.arange(40, 401, l)
+simple_tracker_sub.set_init(p)
+data_path = "/home/yixuan/blender_data/rope_simple_occlusion/render/"
+for i in range(251):
+    rgb_np = exr_to_np(data_path+"rgb_"+'{0:03d}'.format(i)+".exr")
+    depth_np = depth_exr_to_np(data_path+"depth_"+'{0:03d}'.format(i)+".exr")
+    hsv_np = cv2.cvtColor(rgb_np, cv2.COLOR_BGR2HSV)
+    mask = np.bitwise_and(hsv_np[:, :, 1] > 150, hsv_np[:, :, 0] < 30)
+    simple_tracker_sub.set_obs(mask, rgb_np, depth_np, subsample=True)
+    start = time.time()
+#     if i >= 25:
+#         simple_tracker_sub.step(debug=True)
+#     else:
+    simple_tracker_sub.step(debug=False)
+    print("one iteration takes:", time.time()-start)
+    simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/LSLQP_rope_simple_occlusion_vanilla_model_loss/", idx=i)
 ```
 
 ```python
