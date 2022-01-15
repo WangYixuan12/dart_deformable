@@ -167,8 +167,9 @@ class tracker:
         self.rgb_np = rgb_np
         self.depth_np = depth_np
         
-    def set_init(self, q):
+    def set_init(self, q, root_idx=0):
         self.q = q
+        self.root_idx = 
         if self.cuda:
             self.q = q.cuda()
         
@@ -522,99 +523,6 @@ class tracker:
 ```
 
 ```python
-class indi_pt_tracker:
-    def __init__(self, H, W, l, cuda=False):
-        self.H = H
-        self.W = W
-        self.l = l
-        self.cuda = cuda
-        if cuda == True:
-            self.device='cuda'
-        else:
-            self.device='cpu'
-        
-    def set_obs(self, mask, rgb_np=None, depth_np=None):
-#         plt.imshow(mask)
-#         plt.show()
-        mask = (~mask).astype(np.uint8)
-        phi = np.where(mask, 0, -1) + 0.5
-        dist = skfmm.distance(phi, dx = 1)
-#         plt.imshow(dist)
-#         plt.show()
-        dist = dist - dist.min() - 1
-        sobelx = cv2.Sobel(dist,cv2.CV_64F,1,0,ksize=-1)/30.56
-        sobely = cv2.Sobel(dist,cv2.CV_64F,0,1,ksize=-1)/30.56
-
-        self.mask = torch.Tensor(mask).to(device=self.device)
-        self.dist = torch.Tensor(dist).to(device=self.device)
-        self.dist_x = torch.Tensor(sobelx).to(device=self.device)
-        self.dist_y = torch.Tensor(sobely).to(device=self.device)
-                
-        self.rgb_np = rgb_np
-        self.depth_np = depth_np
-    
-    def set_init(self, p):
-        '''
-        p: numpy array (2*Np)
-        '''
-        self.p = p
-    
-    def obj_fn(self, p):
-        '''
-        p: numpy array (2*Np,)
-        '''
-        loss = 0
-        lam = 10.
-        p = p.reshape(-1,2).astype(int)
-        loss += np.sum(np.square(dist[p[:,0], p[:,1]]))
-        prev_edge = (self.p[1:] - self.p[:-1])
-        prev_edge = prev_edge/np.linalg.norm(prev_edge, axis=1)[:, None]
-        curr_edge = (p[1:] - p[:-1])/l
-        curr_edge = curr_edge/np.linalg.norm(curr_edge, axis=1)[:, None]
-        ang = np.arccos(prev_edge * curr_edge)
-        loss += np.sum(np.square(lam*ang))
-        return loss
-    
-    def fixed_len(self, p):
-        '''
-        p: numpy array (2*Np,)
-        '''
-        p = p.reshape(-1,2)
-        return np.sum(np.square(np.linalg.norm(p[1:] - p[:-1], axis=1) - self.l))
-    
-    def step(self):
-        p = self.p.copy().reshape(-1)
-        cons = []
-        fixed_len = {
-            'type': 'eq',
-            'fun': self.fixed_len
-        }
-        cons.append(fixed_len)
-        res = minimize(self.obj_fn, p, constraints=cons, method='SLSQP')
-        self.p = res.x.reshape(-1, 2)
-        print(res)
-        
-    def vis(self, save_dir=None, idx=0):
-        if self.rgb_np is not None:
-            vis_img = self.rgb_np.copy()
-        else:
-            vis_img = np.zeros((self.H, self.W))
-
-        radius = 5
-        color = (255, 0, 0)
-        thickness = 3
-
-        for i in range(c.shape[0]):
-            vis_img = cv2.circle(vis_img, (int(self.p[i][1]), int(self.p[i][0])), radius, color, thickness)
-        plt.imshow(vis_img)
-        if save_dir is not None:
-            import pathlib
-            pathlib.Path(save_dir).mkdir(parents=True, exist_ok=True)
-            plt.savefig(save_dir+"frame_"+'{0:03d}'.format(idx)+".png", dpi=300)
-        plt.show()
-```
-
-```python
 # distance transform
 data_path = "/home/yixuan/dart_deformable/data/rope_simple/"
 i = 0
@@ -743,23 +651,6 @@ for i in range(start_idx, end_idx, 1):
     else:
         track.gauss_obj_step()
         print("one iteration takes:", time.time()-start)
-```
-
-```python
-# sanity check for LSLQP
-H = 540
-W = 810
-l = 20
-simple_tracker = indi_pt_tracker(H, W, l, cuda=False)
-q = np.zeros((11,2)).astype(int)
-q[:, 0] = 330
-q[:, 1] = np.arange(180, 381, 20)
-simple_tracker.set_init(q)
-mask = np.zeros((H, W), dtype=bool)
-mask[200:205, 200:400] = True
-simple_tracker.set_obs(mask)
-simple_tracker.step()
-simple_tracker.vis()
 ```
 
 ```python
