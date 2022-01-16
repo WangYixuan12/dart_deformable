@@ -134,7 +134,7 @@ class indi_pt_tracker:
         self.H = H
         self.W = W
         self.l = l
-        self.lam = 20.
+        self.lam = 100.
         self.debug = debug
         self.reg = reg
         self.ratio = ratio
@@ -501,15 +501,15 @@ class indi_pt_tracker:
         self.debug = debug
         p = self.p.copy().reshape(-1)
         cons = []
-        fixed_len = {
-            'type': 'eq',
-            'fun': self.fixed_len,
-            'jac': self.fixed_len_jac
-        }
+#         fixed_len = {
+#             'type': 'eq',
+#             'fun': self.fixed_len,
+#             'jac': self.fixed_len_jac
+#         }
         opt = {
             'maxiter': 5000,
             'disp': True,
-            'ftol': 1.0
+            'ftol': 0.1
         }
         for i in range(p.shape[0]//2-1):
             fixed_len_i = {
@@ -523,14 +523,14 @@ class indi_pt_tracker:
         self.occl_w = self.occl_w_map[p_mean[:, 0], p_mean[:, 1]]
         self.occl_w_obs = self.occl_w_map[self.p[:, 0].astype(int), self.p[:, 1].astype(int)]
         # TEST ONLY
-        self.occl_w_obs = np.ones(self.p.shape[0])
-        self.occl_w_obs[-1] = 0
-        self.occl_w_obs[-2] = 0
+#         self.occl_w_obs = np.ones(self.p.shape[0])
+#         self.occl_w_obs[-1] = 0
+#         self.occl_w_obs[-4:] = 0
         print("model-based occlusion weight:")
         print(self.occl_w)
         print("observation-based occlusion weight:")
         print(self.occl_w_obs)
-        res = minimize(self.obj_fn, p, jac=self.jac_fn, constraints=cons, method='SLSQP', bounds=self.bound, options=opt, tol=1.0)
+        res = minimize(self.obj_fn, p, jac=self.jac_fn, constraints=cons, method='SLSQP', bounds=self.bound, options=opt)
         print(res)
         self.p = res.x.reshape(-1, 2)
         self.ang = self.p2ang(self.p)
@@ -561,19 +561,27 @@ class indi_pt_tracker:
 
 ```python
 # sanity check for LSLQP
-H = 540
+# H = 540
 W = 810
 l = 20
-simple_tracker = indi_pt_tracker(H, W, l, debug=True, reg=True, ratio=0.0)
+simple_tracker = indi_pt_tracker(H, W, l, debug=True, reg=True, ratio=0.01)
+# q = np.array([201.95308515, 201.66400103, 202.09786527, 221.66352626,
+#        202.41771163, 241.66245867, 201.92526732, 261.66401374,
+#        202.13836598, 281.66290788, 202.59445072, 301.65770758,
+#        202.72086699, 321.6640761 , 203.18105393, 341.68626015,
+#        201.98515825, 361.66378504, 189.96367273, 377.6476552 ,
+#        172.12468215, 386.72147204])
+# q=q.reshape((11,2))
 q = np.zeros((11,2))
-q[:, 0] = 10
+q[:, 0] = 180
 q[:, 1] = np.arange(180, 381, 20)
 simple_tracker.set_init(q)
 mask = np.zeros((H, W), dtype=bool)
-mask[200:205, 200:400] = True
+mask[200:205, 200:340] = True
+mask[210:215, 395:400] = True
 simple_tracker.set_obs(mask, subsample=True)
 # simple_tracker.trans_step()
-simple_tracker.step(debug=True)
+simple_tracker.step(debug=False)
 simple_tracker.vis()
 ```
 
@@ -582,7 +590,7 @@ simple_tracker.vis()
 H = 540
 W = 810
 l = 20
-simple_tracker_sub = indi_pt_tracker(H, W, l, reg=True, ratio=0)
+simple_tracker_sub = indi_pt_tracker(H, W, l, reg=True, ratio=0.01)
 p = np.zeros((19,2))
 p[:,0] = 10
 p[:,1] = np.arange(40, 401, l)
@@ -595,7 +603,7 @@ for i in range(251):
     start = time.time()
     simple_tracker_sub.step(debug=False)
     print("one iteration takes:", time.time()-start)
-    simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_obj_loss_19/", idx=i)
+    simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_comb_loss_19/", idx=i)
 ```
 
 ```python
@@ -603,7 +611,7 @@ for i in range(251):
 H = 540
 W = 810
 l = 20
-simple_tracker_sub = indi_pt_tracker(H, W, l, debug=False,ratio=0.0, reg=True)
+simple_tracker_sub = indi_pt_tracker(H, W, l, debug=False,ratio=0.01, reg=True)
 p = np.zeros((19,2))
 p[:,0] = 275
 p[:,1] = np.arange(40, 401, l)
@@ -621,7 +629,59 @@ for i in range(251):
 #     else:
     simple_tracker_sub.step(debug=False)
     print("one iteration takes:", time.time()-start)
-    simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/LSLQP_rope_simple_occlusion_vanilla_model_loss/", idx=i)
+    simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_occlusion_comb_loss/", idx=i)
+```
+
+```python
+# simple tracking in real data for LSLQP with model-based obj fn
+H = 720
+W = 1280
+l = 40
+track = indi_pt_tracker(H, W, l, ratio=0.0, reg=True)
+
+start_idx = 414
+# 1675 - 2022_01_05_14_35_00
+end_idx = 842
+# 2285 - 2022_01_05_14_35_00
+
+q = np.zeros((19,2))
+q[:,0] = 420
+q[:,1] = np.arange(40, l*(q.shape[0]-1)+41, l)
+track.set_init(q)
+data_path = "/home/yixuan/Downloads/rope_dataset_0105_no_marker/2022_01_05_17_59_17/2022_01_05_17_59_17/"
+for i in range(start_idx, end_idx, 1):
+    rgb_np = cv2.imread(data_path+"realsense_overhead_5_l515_color/"+str(i)+".jpg")
+    depth_np = cv2.imread(data_path+"realsense_overhead_5_l515_depth/"+str(i)+".png", cv2.IMREAD_ANYDEPTH)
+    hsv_np = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2HSV)
+    
+    # mask image
+    depth_mask = np.logical_and(depth_np < 1000, depth_np > 600)
+    
+#     marker_min = np.array([20,0,200])
+#     marker_max = np.array([100,100,300])
+#     marker_mask = threshold(hsv_np, marker_min, marker_max)
+#     marker_mask = np.logical_and(marker_mask, depth_mask)
+
+    rope_min = np.array([0,75,200])
+    rope_max = np.array([60,250,300])
+    rope_mask = threshold(hsv_np, rope_min, rope_max)
+    rope_mask = np.logical_and(rope_mask, depth_mask)
+#     rope_mask = np.logical_or(rope_mask, marker_mask)
+    
+    track.set_obs(rope_mask, rgb_np, subsample=True)
+    start = time.time()
+#     if i == start_idx:
+#         track.gauss_obj_step_trans()
+#     if i >= 524 and i <= 542:
+#         track.gauss_obj_step(debug = True)
+#         print("one iteration takes:", time.time()-start)
+#         track.vis(save_dir="/home/yixuan/dart_deformable/result/rope_dataset_0105_no_occl/", idx=i)
+#     else:
+#         track.gauss_obj_step()
+#         print("one iteration takes:", time.time()-start)
+    track.step()
+    print("one iteration takes:", time.time()-start)
+    track.vis(save_dir="/home/yixuan/dart_deformable/result/LSLQP_rope_dataset_0105_no_occl_reg_comb_loss/", idx=i)
 ```
 
 ```python
