@@ -783,7 +783,7 @@ for r in r_list:
         
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc('M','J','P','G'), 20, (W, H))
-        simple_tracker_sub = indi_pt_tracker(H, W, l, debug=False,ratio=0.01, reg=True)
+        simple_tracker_sub = indi_pt_tracker(H, W, l, debug=False,ratio=r, reg=True, lam=lam)
         p = np.zeros((19,2))
         p[:,0] = 275
         p[:,1] = np.arange(40, 401, l)
@@ -794,6 +794,64 @@ for r in r_list:
             hsv_np = cv2.cvtColor(rgb_np, cv2.COLOR_BGR2HSV)
             mask = np.bitwise_and(hsv_np[:, :, 1] > 150, hsv_np[:, :, 0] < 30)
             simple_tracker_sub.set_obs(mask, rgb_np, depth_np, subsample=True)
+            start = time.time()
+        #     if i >= 25:
+        #         simple_tracker_sub.step(debug=True)
+        #     else:
+            simple_tracker_sub.step(debug=False)
+            total_time[i] = time.time()-start
+            results[i] = simple_tracker_sub.p
+            vis_img = simple_tracker_sub.draw_vis()
+            
+            out.write(vis_img)
+        np.save(time_path, total_time)
+        np.save(results_path, results)
+        out.release()
+            
+#             print("one iteration takes:", time.time()-start)
+        #     simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_occlusion_comb_loss/", idx=i)
+#             simple_tracker_sub.vis()
+```
+
+```python
+# Albation study
+# output: different computation time and accuracy under different r, lam; scale of total loss, three loss terms; correpsonding video
+
+# ablation setting
+r_list = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+lam_list = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 1e5]
+# r_list = [0.01]
+# lam_list = [1000]
+out_dir = '/home/yixuan/dart_deformable/result/ablation/rope_simple/'
+in_dir = '/home/yixuan/blender_data/rope_simple/render/'
+pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+# tracker setting
+H = 540
+W = 810
+l = 20
+for r in r_list:
+    for lam in lam_list:
+        print('r:', r)
+        print('lam:', lam)
+        total_time = np.zeros(251)
+        results = np.zeros((251, 19, 2))
+        
+        video_path = out_dir + 'r_' + str(r) + '_lam_' + str(lam) + '.avi'
+        time_path = out_dir + 'time_r_' + str(r) + '_lam_' + str(lam) + '.npy'
+        results_path = out_dir + 'results_r_' + str(r) + '_lam_' + str(lam) + '.npy'
+        
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc('M','J','P','G'), 20, (W, H))
+        simple_tracker_sub = indi_pt_tracker(H, W, l, debug=False,ratio=r, reg=True, lam=lam)
+        p = np.zeros((19,2))
+        p[:,0] = 275
+        p[:,1] = np.arange(40, 401, l)
+        simple_tracker_sub.set_init(p)
+        for i in range(251):
+            rgb_np = exr_to_np(in_dir+"rgb_"+'{0:03d}'.format(i)+".exr")
+            mask = rgb_np[:, :, 2] > 100
+            simple_tracker_sub.set_obs(mask, rgb_np, subsample=True)
             start = time.time()
         #     if i >= 25:
         #         simple_tracker_sub.step(debug=True)
