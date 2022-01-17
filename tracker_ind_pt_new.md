@@ -28,6 +28,7 @@ from scipy.optimize import minimize, Bounds
 from autograd import grad, jacobian
 from jax import jacfwd, jacrev, grad
 import jax.numpy as jnp
+import pathlib
 ```
 
 ```python
@@ -130,11 +131,11 @@ def dist_to_line_2d(xy, c1, c2):
 
 ```python
 class indi_pt_tracker:
-    def __init__(self, H, W, l, debug=False, reg=False, ratio=1.0):
+    def __init__(self, H, W, l, debug=False, reg=False, ratio=1.0, lam=100.):
         self.H = H
         self.W = W
         self.l = l
-        self.lam = 100.
+        self.lam = lam
         self.debug = debug
         self.reg = reg
         self.ratio = ratio
@@ -508,8 +509,8 @@ class indi_pt_tracker:
 #         }
         opt = {
             'maxiter': 5000,
-            'disp': True,
-            'ftol': 0.1
+            'disp': False,
+            'ftol': 1.0
         }
         for i in range(p.shape[0]//2-1):
             fixed_len_i = {
@@ -526,21 +527,21 @@ class indi_pt_tracker:
 #         self.occl_w_obs = np.ones(self.p.shape[0])
 #         self.occl_w_obs[-1] = 0
 #         self.occl_w_obs[-4:] = 0
-        print("model-based occlusion weight:")
-        print(self.occl_w)
-        print("observation-based occlusion weight:")
-        print(self.occl_w_obs)
+#         print("model-based occlusion weight:")
+#         print(self.occl_w)
+#         print("observation-based occlusion weight:")
+#         print(self.occl_w_obs)
         res = minimize(self.obj_fn, p, jac=self.jac_fn, constraints=cons, method='SLSQP', bounds=self.bound, options=opt)
-        print(res)
+#         print(res)
         self.p = res.x.reshape(-1, 2)
         self.ang = self.p2ang(self.p)
         
-    def vis(self, save_dir=None, idx=0, p=None):
+    def draw_vis(self, p=None):
         if self.rgb_np is not None:
             vis_img = self.rgb_np.copy()
         else:
             vis_img = np.zeros((self.H, self.W))
-
+            
         radius = 5
         color = (255, 0, 0)
         thickness = 3
@@ -551,6 +552,10 @@ class indi_pt_tracker:
         else:
             for i in range(p.shape[0]):
                 vis_img = cv2.circle(vis_img, (int(p[i][1]), int(p[i][0])), radius, color, thickness)
+        return vis_img
+        
+    def vis(self, save_dir=None, idx=0, p=None):
+        vis_img = self.draw_vis(p)
         plt.imshow(vis_img)
         if save_dir is not None:
             import pathlib
@@ -564,7 +569,7 @@ class indi_pt_tracker:
 # H = 540
 W = 810
 l = 20
-simple_tracker = indi_pt_tracker(H, W, l, debug=True, reg=True, ratio=0.01)
+simple_tracker = indi_pt_tracker(H, W, l, debug=True, reg=True, ratio=0.01, lam=1000.)
 # q = np.array([201.95308515, 201.66400103, 202.09786527, 221.66352626,
 #        202.41771163, 241.66245867, 201.92526732, 261.66401374,
 #        202.13836598, 281.66290788, 202.59445072, 301.65770758,
@@ -590,7 +595,7 @@ simple_tracker.vis()
 H = 540
 W = 810
 l = 20
-simple_tracker_sub = indi_pt_tracker(H, W, l, reg=True, ratio=0.01)
+simple_tracker_sub = indi_pt_tracker(H, W, l, reg=True, ratio=0.01, lam=1000.)
 p = np.zeros((19,2))
 p[:,0] = 10
 p[:,1] = np.arange(40, 401, l)
@@ -603,7 +608,8 @@ for i in range(251):
     start = time.time()
     simple_tracker_sub.step(debug=False)
     print("one iteration takes:", time.time()-start)
-    simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_comb_loss_19/", idx=i)
+#     simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_comb_loss_19/", idx=i)
+    simple_tracker_sub.vis()
 ```
 
 ```python
@@ -629,7 +635,8 @@ for i in range(251):
 #     else:
     simple_tracker_sub.step(debug=False)
     print("one iteration takes:", time.time()-start)
-    simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_occlusion_comb_loss/", idx=i)
+#     simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_occlusion_comb_loss/", idx=i)
+    simple_tracker_sub.vis()
 ```
 
 ```python
@@ -637,7 +644,7 @@ for i in range(251):
 H = 720
 W = 1280
 l = 40
-track = indi_pt_tracker(H, W, l, ratio=0.0, reg=True)
+track = indi_pt_tracker(H, W, l, ratio=0.01, reg=True)
 
 start_idx = 414
 # 1675 - 2022_01_05_14_35_00
@@ -681,7 +688,129 @@ for i in range(start_idx, end_idx, 1):
 #         print("one iteration takes:", time.time()-start)
     track.step()
     print("one iteration takes:", time.time()-start)
-    track.vis(save_dir="/home/yixuan/dart_deformable/result/LSLQP_rope_dataset_0105_no_occl_reg_comb_loss/", idx=i)
+#     track.vis(save_dir="/home/yixuan/dart_deformable/result/LSLQP_rope_dataset_0105_no_occl_reg_comb_loss/", idx=i)
+    track.vis()
+```
+
+```python
+# DEBUG for simple tracking in real data for LSLQP with model-based obj fn
+H = 720
+W = 1280
+l = 40
+track = indi_pt_tracker(H, W, l, ratio=0.01, reg=True)
+
+i = 532
+
+q = np.array([[ 110.86675573,  574.30293958,  149.17771667,  562.80205824,
+        188.69614666,  568.99024793,  212.7846627 ,  600.92366923,
+        231.21223859,  636.42612614,  233.09494209,  676.38179442,
+        230.44660706,  716.29402716,  223.12542613,  755.61832384,
+        217.73616298,  795.25360917,  214.41808152,  835.11575081,
+        202.54900974,  873.31424731,  190.83452071,  911.56043336,
+        179.50823938,  949.92337578,  169.29130692,  988.59654854,
+        157.17141544, 1026.7162053 ,  147.29422398, 1065.47754029,
+        140.11067863, 1104.82721216,  132.91147946, 1144.17402311,
+        122.91909364, 1182.90582178]])
+q = q.reshape((19,2))
+# q = np.zeros((19,2))
+# q[:,0] = 420
+# q[:,1] = np.arange(40, l*(q.shape[0]-1)+41, l)
+track.set_init(q)
+data_path = "/home/yixuan/Downloads/rope_dataset_0105_no_marker/2022_01_05_17_59_17/2022_01_05_17_59_17/"
+rgb_np = cv2.imread(data_path+"realsense_overhead_5_l515_color/"+str(i)+".jpg")
+depth_np = cv2.imread(data_path+"realsense_overhead_5_l515_depth/"+str(i)+".png", cv2.IMREAD_ANYDEPTH)
+hsv_np = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2HSV)
+
+# mask image
+depth_mask = np.logical_and(depth_np < 1000, depth_np > 600)
+
+rope_min = np.array([0,75,200])
+rope_max = np.array([60,250,300])
+rope_mask = threshold(hsv_np, rope_min, rope_max)
+rope_mask = np.logical_and(rope_mask, depth_mask)
+
+track.set_obs(rope_mask, rgb_np, subsample=True)
+start = time.time()
+track.step(debug=False)
+print("one iteration takes:", time.time()-start)
+track.vis()
+```
+
+```python
+def imgs_to_video(path, start, end, img_ext='.png', img_prefix='frame'):
+    rgb = cv2.imread(path+img_prefix+'_'+'{0:03d}'.format(start)+img_ext)
+    H, W, _ = rgb.shape
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter(path+'dataset.avi', cv2.VideoWriter_fourcc('M','J','P','G'), 20, (W, H))
+    for i in range(start,end):
+        rgb = cv2.imread(path+img_prefix+'_'+'{0:03d}'.format(i)+img_ext)
+        out.write(rgb)
+    out.release()
+```
+
+```python
+path="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_occlusion_comb_loss/"
+imgs_to_video(path, start=0, end=251+1, img_ext='.png', img_prefix='frame')
+```
+
+```python
+# Albation study
+# output: different computation time and accuracy under different r, lam; scale of total loss, three loss terms; correpsonding video
+
+# ablation setting
+r_list = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+lam_list = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 1e5]
+# r_list = [0.01]
+# lam_list = [1000]
+out_dir = '/home/yixuan/dart_deformable/result/ablation/rope_simple_occlusion/'
+in_dir = '/home/yixuan/blender_data/rope_simple_occlusion/render/'
+pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+# tracker setting
+H = 540
+W = 810
+l = 20
+for r in r_list:
+    for lam in lam_list:
+        print('r:', r)
+        print('lam:', lam)
+        total_time = np.zeros(251)
+        results = np.zeros((251, 19, 2))
+        
+        video_path = out_dir + 'r_' + str(r) + '_lam_' + str(lam) + '.avi'
+        time_path = out_dir + 'time_r_' + str(r) + '_lam_' + str(lam) + '.npy'
+        results_path = out_dir + 'results_r_' + str(r) + '_lam_' + str(lam) + '.npy'
+        
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc('M','J','P','G'), 20, (W, H))
+        simple_tracker_sub = indi_pt_tracker(H, W, l, debug=False,ratio=0.01, reg=True)
+        p = np.zeros((19,2))
+        p[:,0] = 275
+        p[:,1] = np.arange(40, 401, l)
+        simple_tracker_sub.set_init(p)
+        for i in range(251):
+            rgb_np = exr_to_np(in_dir+"rgb_"+'{0:03d}'.format(i)+".exr")
+            depth_np = depth_exr_to_np(in_dir +"depth_"+'{0:03d}'.format(i)+".exr")
+            hsv_np = cv2.cvtColor(rgb_np, cv2.COLOR_BGR2HSV)
+            mask = np.bitwise_and(hsv_np[:, :, 1] > 150, hsv_np[:, :, 0] < 30)
+            simple_tracker_sub.set_obs(mask, rgb_np, depth_np, subsample=True)
+            start = time.time()
+        #     if i >= 25:
+        #         simple_tracker_sub.step(debug=True)
+        #     else:
+            simple_tracker_sub.step(debug=False)
+            total_time[i] = time.time()-start
+            results[i] = simple_tracker_sub.p
+            vis_img = simple_tracker_sub.draw_vis()
+            
+            out.write(vis_img)
+        np.save(time_path, total_time)
+        np.save(results_path, results)
+        out.release()
+            
+#             print("one iteration takes:", time.time()-start)
+        #     simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_occlusion_comb_loss/", idx=i)
+#             simple_tracker_sub.vis()
 ```
 
 ```python
