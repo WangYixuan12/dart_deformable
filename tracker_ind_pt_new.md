@@ -113,16 +113,16 @@ def sign_nozero(p):
 def dist_to_line_2d(xy, c1, c2):
     '''
     Input:
-        xy: (2, Nm) jax numpy array - xy(h, w) is the coordinate
-        c1: (2,) jax numpy array - (x,y) of one end
-        c2: (2,) jax numpy array - (x,y) of another end
+        xy: (2/3, Nm) jax numpy array - (x, y, [z]) is the coordinate
+        c1: (2/3,) jax numpy array - (x,y,[z]) of one end
+        c2: (2/3,) jax numpy array - (x,y,[z]) of another end
     '''
-    xy_c1 = xy - c1.reshape(2,1)
-    c12 = (c2 - c1).reshape(2,1)
+    xy_c1 = xy - c1.reshape(-1,1)
+    c12 = (c2 - c1).reshape(-1,1)
     c12_length = jnp.linalg.norm(c12)
     c12 = c12/c12_length
     closest_dist = jnp.clip(jnp.sum(xy_c1 * c12, axis=0), 0, c12_length)
-    closest_pt = c1.reshape(2,1) + closest_dist * c12
+    closest_pt = c1.reshape(-1,1) + closest_dist * c12
 #     dist = jnp.linalg.norm(xy - closest_pt+1e-10, axis = 0)
     dist = jnp.sum(jnp.square(xy - closest_pt), axis = 0)
     # otherwise derivative at 0 is undefined
@@ -131,7 +131,7 @@ def dist_to_line_2d(xy, c1, c2):
 
 ```python
 class indi_pt_tracker:
-    def __init__(self, H, W, l, debug=False, reg=False, ratio=1.0, lam=100.):
+    def __init__(self, H, W, l, debug=False, reg=False, ratio=1.0, lam=100., dim=2, cam_K=None):
         self.H = H
         self.W = W
         self.l = l
@@ -140,62 +140,78 @@ class indi_pt_tracker:
         self.reg = reg
         self.ratio = ratio
         self.model_jac_fn_jax = jacfwd(self.model_obj_fn)
+        self.dim = dim
+        self.cam_K = cam_K
         
     def set_obs(self, mask, rgb_np=None, depth_np=None, subsample=False):
-        if subsample:
-            import point_cloud_utils as pcu
+        if dim = 2:
+            if subsample:
+                import point_cloud_utils as pcu
 
-            # v is a nv by 3 NumPy array of vertices
-            # n is a nv by 3 NumPy array of vertex normals
-            # n is a nv by 4 NumPy array of vertex colors
-            N = np.array(mask.nonzero()).shape[1]
-            v = np.zeros((N, 3))
-            n = np.zeros_like(v)
-            c = np.zeros((N, 4))
-            v[:, :2] = np.array(mask.nonzero()).T
-            n[:, 2] = 1.
+                # v is a nv by 3 NumPy array of vertices
+                # n is a nv by 3 NumPy array of vertex normals
+                # n is a nv by 4 NumPy array of vertex colors
+                N = np.array(mask.nonzero()).shape[1]
+                v = np.zeros((N, 3))
+                n = np.zeros_like(v)
+                c = np.zeros((N, 4))
+                v[:, :2] = np.array(mask.nonzero()).T
+                n[:, 2] = 1.
 
-            # We'll use a voxel grid with 128 voxels per axis
-            num_voxels_per_axis = 128
+                # We'll use a voxel grid with 128 voxels per axis
+                num_voxels_per_axis = 128
 
-            # Size of the axis aligned bounding box of the point cloud
-            bbox_size = v.max(0) - v.min(0) + np.array([0., 0., 0.1])
+                # Size of the axis aligned bounding box of the point cloud
+                bbox_size = v.max(0) - v.min(0) + np.array([0., 0., 0.1])
 
-            # The size per-axis of a single voxel
-            sizeof_voxel = bbox_size / num_voxels_per_axis
+                # The size per-axis of a single voxel
+                sizeof_voxel = bbox_size / num_voxels_per_axis
 
-            # Downsample a point cloud on a voxel grid so there is at most one point per voxel.
-            # Multiple points, normals, and colors within a voxel cell are averaged together.
-            v_sampled, n_sampled, c_sampled = pcu.downsample_point_cloud_voxel_grid(sizeof_voxel, v, n, c)
-            mask_idx_spl = v_sampled[:, :2].astype(int)
-            mask_spl = np.zeros_like(mask)
-            mask_spl[mask_idx_spl[:, 0], mask_idx_spl[:, 1]] = True
-            self.mask = mask_spl
+                # Downsample a point cloud on a voxel grid so there is at most one point per voxel.
+                # Multiple points, normals, and colors within a voxel cell are averaged together.
+                v_sampled, n_sampled, c_sampled = pcu.downsample_point_cloud_voxel_grid(sizeof_voxel, v, n, c)
+                mask_idx_spl = v_sampled[:, :2].astype(int)
+                mask_spl = np.zeros_like(mask)
+                mask_spl[mask_idx_spl[:, 0], mask_idx_spl[:, 1]] = True
+                self.mask = mask_spl
+
+            # occlusion weight map
+            if depth_np is not None:
+                occl_map = depth_np < 2000.0
+                occl_dist = skfmm.distance(~occl_map, dx = 1)
+                sigma = 30.
+    #             self.occl_w_map = 1-np.exp(-occl_dist/sigma)
+                self.occl_w_map = np.zeros_like(occl_dist)
+                self.occl_w_map[occl_dist<=sigma] = 0.0
+                self.occl_w_map[occl_dist>sigma] = 1.0
+            else:
+                self.occl_w_map = np.ones_like(mask).astype(float)
+
+            mask = (~mask).astype(np.uint8)
+            phi = np.where(mask, 0, -1) + 0.5
+            dist = skfmm.distance(phi, dx = 1)
+            dist = dist - dist.min() # - 1
+            sobelx = cv2.Sobel(dist,cv2.CV_64F,1,0,ksize=-1)/30.56
+            sobely = cv2.Sobel(dist,cv2.CV_64F,0,1,ksize=-1)/30.56
+
+            self.full_mask = mask
+            self.dist = dist
+            self.dist_x = sobelx
+            self.dist_y = sobely
             
-        # occlusion weight map
-        if depth_np is not None:
-            occl_map = depth_np < 2000.0
-            occl_dist = skfmm.distance(~occl_map, dx = 1)
-            sigma = 30.
-#             self.occl_w_map = 1-np.exp(-occl_dist/sigma)
-            self.occl_w_map = np.zeros_like(occl_dist)
-            self.occl_w_map[occl_dist<=sigma] = 0.0
-            self.occl_w_map[occl_dist>sigma] = 1.0
-        else:
-            self.occl_w_map = np.ones_like(mask).astype(float)
+        elif dim == 3:
+            # RGBD to pc
+            unit = 1000.0
+            img = img/unit
+            mask_idx=mask.nonzero()
+            X = (mask_idx[1]-cx)*img/fx
+            Y = (mask_idx[0]-cy)*img/fy
+            pc = np.zeros((mask_idx[0].shape[0], 3))
+            pc[:,0]=X.reshape(-1)
+            pc[:,1]=Y.reshape(-1)
+            pc[:,2]=depth_np[mask].reshape(-1)
+            self.pc = pc # Nm, 3
         
-        mask = (~mask).astype(np.uint8)
-        phi = np.where(mask, 0, -1) + 0.5
-        dist = skfmm.distance(phi, dx = 1)
-        dist = dist - dist.min() # - 1
-        sobelx = cv2.Sobel(dist,cv2.CV_64F,1,0,ksize=-1)/30.56
-        sobely = cv2.Sobel(dist,cv2.CV_64F,0,1,ksize=-1)/30.56
-
-        self.full_mask = mask
-        self.dist = dist
-        self.dist_x = sobelx
-        self.dist_y = sobely
-                
         self.rgb_np = rgb_np
         self.depth_np = depth_np
     
@@ -212,7 +228,7 @@ class indi_pt_tracker:
         nonmask_idx = nonmask_idx[:, dist < 10]
         return nonmask_idx
     
-    def p2ang(self, p):
+    def p2ang_2d(self, p):
         '''
         Input: p: numpy array (Np, 2)
         Output: ang: numpy array (Ne)
@@ -224,6 +240,19 @@ class indi_pt_tracker:
         dy[ang_0_pi==0] += 0.01 # singular value for ang_0_pi = 0 or anf_0_pi = pi
         ang = np.sign(dy)*ang_0_pi
         return ang
+    
+    def p2dang(self, p):
+        '''
+        Input: p: numpy array (Np, 3)
+        Output: dg numpy array (Ne)
+        '''
+        p = p.astype(float)
+        l23 = p[2:] - p[1:-1]
+        l12 = p[1:-1] - p[0:-2]
+        num = np.sum(l12*l23. axis=0)
+        den = np.linalg.norm(l12, axis=0) * np.linalg.norm(l23, axis=0)
+        dang = np.arccos(num/den)
+        return dang
     
     def hard_constrain(self, p):
         '''
@@ -239,7 +268,7 @@ class indi_pt_tracker:
         p: numpy array (Np,2)
         '''
         self.p = p
-        self.ang = self.p2ang(self.p)
+        self.ang = self.p2ang_2d(self.p)
         lb = np.zeros(p.shape[0]*2)
         ub = np.ones(p.shape[0]*2)
         ub[0::2] = self.H-1
@@ -259,7 +288,7 @@ class indi_pt_tracker:
             print('---- In Obj Fn ----')
         ratio = self.ratio
         l_obs = self.obs_obj_fn(p)
-        p = jnp.array(p.reshape(-1, 2))
+        p = jnp.array(p.reshape(-1, self.dim))
         l_model = self.model_obj_fn(p)
         loss = l_obs+ratio*l_model
         if self.debug:
@@ -279,11 +308,11 @@ class indi_pt_tracker:
         p: numpy array (2*Np,)
         '''
         loss = 0
-        p = p.reshape(-1,2)
+        p = p.reshape(-1,self.dim)
         if self.reg:
-#             d_ang = self.p2ang(p) - self.ang
+#             d_ang = self.p2ang_2d(p) - self.ang
 #             loss += np.sum(self.lam*np.abs(d_ang))
-            ang = self.p2ang(p)
+            ang = self.p2ang_2d(p)
             loss += 0.5*self.lam*np.sum(np.square(ang[:-1]-ang[1:]))
         p = p.astype(int)
         p = self.hard_constrain(p)
@@ -311,36 +340,44 @@ class indi_pt_tracker:
         '''
         Input: p: jax numpy array, (Np,2)
         '''
-        mask_idx = jnp.array(self.mask.nonzero())
-#         nonmask_idx = self.find_nonmask(p)
-        Np = p.shape[0]
-        dist_mask = jnp.zeros((Np-1,mask_idx.shape[1]))
-#         dist_nonmask = jnp.zeros((Np-1,nonmask_idx.shape[1]))
-#         prev_dist = dist_to_line_2d(mask_idx, p[0], p[1])
-        for i in range(Np-1):
-            # TODO: add occlusion weight here
-#             dist_all = dist_all.at[i].set(dist_to_line_2d(mask_idx, p[i], p[i+1])/(self.occl_w[i]+0.01))
-            dist_mask = dist_mask.at[i].set(dist_to_line_2d(mask_idx, p[i], p[i+1]))
-#             if self.occl_w_obs[i] < 0.5:
-#                 dist_mask_to_pi = float('Inf')*jnp.ones(mask_idx.shape[1])
-#             else:
-#                 dist_mask_to_pi = jnp.linalg.norm(mask_idx-p[i][:, None]+1e-10, axis=0)/(self.occl_w_obs[i]+1e-10)
-#             dist_mask = dist_mask.at[i].set(dist_mask_to_pi)
-#             print(jnp.linalg.norm(mask_idx-p[i]+1e-10, axis=0).shape)
-#             print(mask_idx.shape)
-#             print(p[i].shape)
-#             dist_nonmask = dist_nonmask.at[i].set(dist_to_line_2d(nonmask_idx, p[i], p[i+1]))
-#             dist = jnp.minimum(dist_to_line_2d(mask_idx, p[i], p[i+1]), prev_dist)
-#             prev_dist = dist
-#         weight_seg_idx = (dist_mask/(self.occl_w_obs+1e-10)[:, None]).argmin(axis=0)
-#         seg_idx = dist_mask.argmin(axis=0)
-#         print(jnp.abs(weight_seg_idx-seg_idx).sum())
-#         weight_dist = dist_mask[seg_idx, np.arange(mask_idx.shape[1])]
-        dist = dist_mask.min(axis=0)
-#         print(jnp.abs(weight_dist-dist).sum())
-#         nondist = dist_nonmask.min(axis=0)
-#         occl_w = jnp.array(self.occl_w)
-#         dist = dist*occl_w[seg_idx]
+        if self.dim == 2:
+            mask_idx = jnp.array(self.mask.nonzero())
+    #         nonmask_idx = self.find_nonmask(p)
+            Np = p.shape[0]
+            dist_mask = jnp.zeros((Np-1,mask_idx.shape[1]))
+    #         dist_nonmask = jnp.zeros((Np-1,nonmask_idx.shape[1]))
+    #         prev_dist = dist_to_line_2d(mask_idx, p[0], p[1])
+            for i in range(Np-1):
+                # TODO: add occlusion weight here
+    #             dist_all = dist_all.at[i].set(dist_to_line_2d(mask_idx, p[i], p[i+1])/(self.occl_w[i]+0.01))
+                dist_mask = dist_mask.at[i].set(dist_to_line_2d(mask_idx, p[i], p[i+1]))
+    #             if self.occl_w_obs[i] < 0.5:
+    #                 dist_mask_to_pi = float('Inf')*jnp.ones(mask_idx.shape[1])
+    #             else:
+    #                 dist_mask_to_pi = jnp.linalg.norm(mask_idx-p[i][:, None]+1e-10, axis=0)/(self.occl_w_obs[i]+1e-10)
+    #             dist_mask = dist_mask.at[i].set(dist_mask_to_pi)
+    #             print(jnp.linalg.norm(mask_idx-p[i]+1e-10, axis=0).shape)
+    #             print(mask_idx.shape)
+    #             print(p[i].shape)
+    #             dist_nonmask = dist_nonmask.at[i].set(dist_to_line_2d(nonmask_idx, p[i], p[i+1]))
+    #             dist = jnp.minimum(dist_to_line_2d(mask_idx, p[i], p[i+1]), prev_dist)
+    #             prev_dist = dist
+    #         weight_seg_idx = (dist_mask/(self.occl_w_obs+1e-10)[:, None]).argmin(axis=0)
+    #         seg_idx = dist_mask.argmin(axis=0)
+    #         print(jnp.abs(weight_seg_idx-seg_idx).sum())
+    #         weight_dist = dist_mask[seg_idx, np.arange(mask_idx.shape[1])]
+            dist = dist_mask.min(axis=0)
+    #         print(jnp.abs(weight_dist-dist).sum())
+    #         nondist = dist_nonmask.min(axis=0)
+    #         occl_w = jnp.array(self.occl_w)
+    #         dist = dist*occl_w[seg_idx]
+        else:
+            pc_jnp = jnp.array(self.pc.T)
+            Np = p.shape[0]
+            dist_mask = jnp.zeros((Np-1,pc_jnp.shape[0]))
+            for i in range(Np-1):
+                dist_mask = dist_mask.at[i].set(dist_to_line_2d(pc_jnp, p[i], p[i+1]))
+            dist = dist_mask.min(axis=0)
         return dist.sum()#-nondist.sum()
     
     '''
@@ -384,12 +421,12 @@ class indi_pt_tracker:
             dx = p[1:, 1] - p[:-1, 1]
             dy = p[1:, 0] - p[:-1, 0]
             l = np.square(dx)+np.square(dy)
-#             d_ang = self.p2ang(p) - self.ang
+#             d_ang = self.p2ang_2d(p) - self.ang
 #             J_ang[1:, 0] += self.lam*np.sign(d_ang)*dx/l
 #             J_ang[1:, 1] += -self.lam*np.sign(d_ang)*dy/l
 #             J_ang[:-1,0] += -self.lam*np.sign(d_ang)*dx/l
 #             J_ang[:-1,1] += self.lam*np.sign(d_ang)*dy/l
-            ang = self.p2ang(p)
+            ang = self.p2ang_2d(p)
             d_ang = ang[1:] - ang[:-1]
             J_ang[0:-2, 0] += self.lam*d_ang*dx[0:-1]/l[0:-1]
             J_ang[0:-2, 1] += -self.lam*d_ang*dy[0:-1]/l[0:-1]
@@ -534,7 +571,7 @@ class indi_pt_tracker:
         res = minimize(self.obj_fn, p, jac=self.jac_fn, constraints=cons, method='SLSQP', bounds=self.bound, options=opt)
 #         print(res)
         self.p = res.x.reshape(-1, 2)
-        self.ang = self.p2ang(self.p)
+        self.ang = self.p2ang_2d(self.p)
         
     def draw_vis(self, p=None):
         if self.rgb_np is not None:
