@@ -29,6 +29,7 @@ from autograd import grad, jacobian
 from jax import jacfwd, jacrev, grad
 import jax.numpy as jnp
 import pathlib
+import random
 ```
 
 ```python
@@ -40,6 +41,14 @@ os.environ['JAX_DEBUG_NANS'] = '1'
 ```python
 from jax.config import config
 config.update("jax_debug_nans", True)
+```
+
+```python
+def construct_xy(H, W, cuda=False):
+    xy = np.zeros((2, H, W))
+    xy[0] = np.arange(W).reshape(1, W).repeat((H, 1)) # x
+    xy[1] = np.arange(H).reshape(H, 1).repeat((1, W)) # y
+    return xy
 ```
 
 ```python
@@ -144,7 +153,7 @@ class indi_pt_tracker:
         self.cam_K = cam_K
         
     def set_obs(self, mask, rgb_np=None, depth_np=None, subsample=False):
-        if dim = 2:
+        if self.dim == 2:
             if subsample:
                 import point_cloud_utils as pcu
 
@@ -199,7 +208,7 @@ class indi_pt_tracker:
             self.dist_x = sobelx
             self.dist_y = sobely
             
-        elif dim == 3:
+        elif self.dim == 3:
             # RGBD to pc
             unit = 1000.0
             img = img/unit
@@ -249,7 +258,7 @@ class indi_pt_tracker:
         p = p.astype(float)
         l23 = p[2:] - p[1:-1]
         l12 = p[1:-1] - p[0:-2]
-        num = np.sum(l12*l23. axis=0)
+        num = np.sum(l12*l23, axis=0)
         den = np.linalg.norm(l12, axis=0) * np.linalg.norm(l23, axis=0)
         dang = np.arccos(num/den)
         return dang
@@ -309,6 +318,7 @@ class indi_pt_tracker:
         '''
         loss = 0
         p = p.reshape(-1,self.dim)
+        # TODO: to impl reg term in 3d
         if self.reg:
 #             d_ang = self.p2ang_2d(p) - self.ang
 #             loss += np.sum(self.lam*np.abs(d_ang))
@@ -572,6 +582,65 @@ class indi_pt_tracker:
 #         print(res)
         self.p = res.x.reshape(-1, 2)
         self.ang = self.p2ang_2d(self.p)
+    
+    def robust_step(self, debug=False):
+        self.debug = debug
+        self.full_mask_robust = ~(self.full_mask.astype(bool)) # remember the full mask, which changed later
+        self.init_p = self.p
+        p_mean = (0.5*(self.p[:-1] + self.p[1:])).astype(int)
+        self.occl_w = self.occl_w_map[p_mean[:, 0], p_mean[:, 1]]
+        self.occl_w_obs = self.occl_w_map[self.p[:, 0].astype(int), self.p[:, 1].astype(int)]
+        delta = 100.
+        last_mask = self.full_mask
+        first = True
+        
+        while first or not (last_mask == self.full_mask).all():
+            if first:
+                first = False
+            last_mask = self.full_mask
+            
+            # choose points within the full mask that is within the delta
+            mask_idx = np.array(self.full_mask_robust.nonzero())
+#             print(mask_idx)
+            Np = self.p.shape[0]
+            dist_Np = np.zeros((Np-1, mask_idx.shape[1]))
+            for i in range(self.p.shape[0]-1):
+                dist_Np[i] = dist_to_line_2d(mask_idx, self.p[i], self.p[i+1])
+            dist = np.min(dist_Np, axis=0)
+#             print(dist < delta)
+            cons_mask_idx = mask_idx[:, dist < delta]
+#             print(cons_mask_idx)
+            cons_mask = np.zeros((self.H, self. W)).astype(bool)
+            cons_mask[cons_mask_idx[0], cons_mask_idx[1]] = True
+#             print('current consensus mask')
+            plt.imshow(cons_mask)
+            plt.show()
+            diff_mask = np.logical_xor(cons_mask, ~self.full_mask_robust.astype(bool))
+            plt.imshow(diff_mask)
+            plt.show()
+            self.set_obs(cons_mask, rgb_np = self.rgb_np, depth_np = self.depth_np, subsample=True)
+            vis_img = self.draw_vis()
+            plt.imshow(vis_img)
+            plt.show()
+            
+            p = self.init_p.copy().reshape(-1)
+            cons = []
+            opt = {
+                'maxiter': 5000,
+                'disp': False,
+                'ftol': 1.0
+            }
+            for i in range(p.shape[0]//2-1):
+                fixed_len_i = {
+                    'type': 'eq',
+                    'fun': self.fixed_len_i,
+                    'jac': self.fixed_len_i_jac,
+                    'args': [i]
+            }
+            cons.append(fixed_len_i)
+            res = minimize(self.obj_fn, p, jac=self.jac_fn, constraints=cons, method='SLSQP', bounds=self.bound, options=opt)
+#             print(res)
+            self.p = res.x.reshape(-1, 2)
         
     def draw_vis(self, p=None):
         if self.rgb_np is not None:
@@ -637,16 +706,51 @@ p = np.zeros((19,2))
 p[:,0] = 10
 p[:,1] = np.arange(40, 401, l)
 simple_tracker_sub.set_init(p)
+rand_h = random.randint(0, H-5)
+rand_w = random.randint(0, W-5)
+rand_h = 30
+rand_w = 780
+
+rand_h_np = np.random.randint(0, H-5, size=10).astype(int)
+rand_w_np = np.random.randint(0, W-5, size=10).astype(int)
+
+rand_h_coll = random.randint(0, H-50)
+rand_w_coll = random.randint(0, W-50)
+
 data_path = "/home/yixuan/dart_deformable/data/rope_simple/"
+video_path = '/home/yixuan/dart_deformable/result/outliers/robust_rope_simple_single_outlier.avi'
+out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc('M','J','P','G'), 20, (2*W, H))
 for i in range(251):
     rgb_np = exr_to_np(data_path+"rgb_"+'{0:03d}'.format(i)+".exr")
     mask = rgb_np[:, :, 2] > 100
+    
+    if i > 0:
+        # point outlier
+        mask[rand_h:rand_h+5, rand_w:rand_w+5] = True
+    
+    # contextual outlier
+#     for i in range(rand_h_np.shape[0]):
+#         mask[rand_h_np[i]:rand_h_np[i]+5, rand_w_np[i]:rand_w_np[i]+5] = True
+    
+    # collective outlier
+#     mask[rand_h_coll:rand_h_coll+50, rand_w_coll:rand_w_coll+50] = True
+    
     simple_tracker_sub.set_obs(mask, rgb_np, subsample=True)
     start = time.time()
-    simple_tracker_sub.step(debug=False)
+    if i > 0:
+        simple_tracker_sub.robust_step(debug=False)
+    else:
+        simple_tracker_sub.step(debug=False)
     print("one iteration takes:", time.time()-start)
 #     simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_comb_loss_19/", idx=i)
-    simple_tracker_sub.vis()
+#     simple_tracker_sub.vis()
+    vis_img = simple_tracker_sub.draw_vis()
+    mask = np.repeat(mask[:, : ,None], 3, axis=2).astype(np.uint8)*255
+    stack_img = np.hstack((mask, vis_img))
+    out.write(stack_img)
+    plt.imshow(stack_img)
+    plt.show()
+out.release()
 ```
 
 ```python
@@ -906,6 +1010,18 @@ for r in r_list:
 #             print("one iteration takes:", time.time()-start)
         #     simple_tracker_sub.vis(save_dir="/home/yixuan/dart_deformable/result/reg_LSLQP_rope_simple_occlusion_comb_loss/", idx=i)
 #             simple_tracker_sub.vis()
+```
+
+```python
+a = np.ones((100))
+```
+
+```python
+b = np.ones((100))
+```
+
+```python
+(a == b).all()
 ```
 
 ```python
