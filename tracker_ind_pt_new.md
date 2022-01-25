@@ -578,6 +578,7 @@ class indi_pt_tracker:
 #         print(self.occl_w)
 #         print("observation-based occlusion weight:")
 #         print(self.occl_w_obs)
+#         print(p)
         res = minimize(self.obj_fn, p, jac=self.jac_fn, constraints=cons, method='SLSQP', bounds=self.bound, options=opt)
 #         print(res)
         self.p = res.x.reshape(-1, 2)
@@ -585,12 +586,12 @@ class indi_pt_tracker:
     
     def robust_step(self, debug=False):
         self.debug = debug
-        self.full_mask_robust = ~(self.full_mask.astype(bool)) # remember the full mask, which changed later
-        self.init_p = self.p
+        self.full_mask_robust = ~(self.full_mask.copy().astype(bool)) # remember the full mask, which changed later
+        self.init_p = self.p.copy()
         p_mean = (0.5*(self.p[:-1] + self.p[1:])).astype(int)
         self.occl_w = self.occl_w_map[p_mean[:, 0], p_mean[:, 1]]
         self.occl_w_obs = self.occl_w_map[self.p[:, 0].astype(int), self.p[:, 1].astype(int)]
-        delta = 100.
+        delta = 30*30
         last_mask = self.full_mask
         first = True
         
@@ -607,21 +608,22 @@ class indi_pt_tracker:
             for i in range(self.p.shape[0]-1):
                 dist_Np[i] = dist_to_line_2d(mask_idx, self.p[i], self.p[i+1])
             dist = np.min(dist_Np, axis=0)
+#             print(dist)
 #             print(dist < delta)
             cons_mask_idx = mask_idx[:, dist < delta]
 #             print(cons_mask_idx)
             cons_mask = np.zeros((self.H, self. W)).astype(bool)
             cons_mask[cons_mask_idx[0], cons_mask_idx[1]] = True
 #             print('current consensus mask')
-            plt.imshow(cons_mask)
-            plt.show()
+#             plt.imshow(cons_mask)
+#             plt.show()
             diff_mask = np.logical_xor(cons_mask, ~self.full_mask_robust.astype(bool))
-            plt.imshow(diff_mask)
-            plt.show()
+#             plt.imshow(diff_mask)
+#             plt.show()
             self.set_obs(cons_mask, rgb_np = self.rgb_np, depth_np = self.depth_np, subsample=True)
             vis_img = self.draw_vis()
-            plt.imshow(vis_img)
-            plt.show()
+#             plt.imshow(vis_img)
+#             plt.show()
             
             p = self.init_p.copy().reshape(-1)
             cons = []
@@ -636,8 +638,9 @@ class indi_pt_tracker:
                     'fun': self.fixed_len_i,
                     'jac': self.fixed_len_i_jac,
                     'args': [i]
-            }
-            cons.append(fixed_len_i)
+                }
+                cons.append(fixed_len_i)
+#             print(p)
             res = minimize(self.obj_fn, p, jac=self.jac_fn, constraints=cons, method='SLSQP', bounds=self.bound, options=opt)
 #             print(res)
             self.p = res.x.reshape(-1, 2)
@@ -716,24 +719,26 @@ rand_w_np = np.random.randint(0, W-5, size=10).astype(int)
 
 rand_h_coll = random.randint(0, H-50)
 rand_w_coll = random.randint(0, W-50)
+rand_h_coll = 350
+rand_w_coll = 200
 
 data_path = "/home/yixuan/dart_deformable/data/rope_simple/"
-video_path = '/home/yixuan/dart_deformable/result/outliers/robust_rope_simple_single_outlier.avi'
+video_path = '/home/yixuan/dart_deformable/result/outliers/robust_rope_simple_collective_outlier.avi'
 out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc('M','J','P','G'), 20, (2*W, H))
 for i in range(251):
     rgb_np = exr_to_np(data_path+"rgb_"+'{0:03d}'.format(i)+".exr")
     mask = rgb_np[:, :, 2] > 100
     
     if i > 0:
-        # point outlier
-        mask[rand_h:rand_h+5, rand_w:rand_w+5] = True
+#         point outlier
+#         mask[rand_h:rand_h+5, rand_w:rand_w+5] = True
     
-    # contextual outlier
+#     contextual outlier
 #     for i in range(rand_h_np.shape[0]):
 #         mask[rand_h_np[i]:rand_h_np[i]+5, rand_w_np[i]:rand_w_np[i]+5] = True
     
-    # collective outlier
-#     mask[rand_h_coll:rand_h_coll+50, rand_w_coll:rand_w_coll+50] = True
+#     collective outlier
+        mask[rand_h_coll:rand_h_coll+100, rand_w_coll:rand_w_coll+100] = True
     
     simple_tracker_sub.set_obs(mask, rgb_np, subsample=True)
     start = time.time()
@@ -748,8 +753,8 @@ for i in range(251):
     mask = np.repeat(mask[:, : ,None], 3, axis=2).astype(np.uint8)*255
     stack_img = np.hstack((mask, vis_img))
     out.write(stack_img)
-    plt.imshow(stack_img)
-    plt.show()
+#     plt.imshow(stack_img)
+#     plt.show()
 out.release()
 ```
 
@@ -797,6 +802,8 @@ q[:,0] = 420
 q[:,1] = np.arange(40, l*(q.shape[0]-1)+41, l)
 track.set_init(q)
 data_path = "/home/yixuan/Downloads/rope_dataset_0105_no_marker/2022_01_05_17_59_17/2022_01_05_17_59_17/"
+video_path = '/home/yixuan/dart_deformable/result/LSLQP_rope_dataset_0105_no_occl_reg_comb_loss.avi'
+out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc('M','J','P','G'), 20, (2*W, H))
 for i in range(start_idx, end_idx, 1):
     rgb_np = cv2.imread(data_path+"realsense_overhead_5_l515_color/"+str(i)+".jpg")
     depth_np = cv2.imread(data_path+"realsense_overhead_5_l515_depth/"+str(i)+".png", cv2.IMREAD_ANYDEPTH)
@@ -827,54 +834,17 @@ for i in range(start_idx, end_idx, 1):
 #     else:
 #         track.gauss_obj_step()
 #         print("one iteration takes:", time.time()-start)
+#     if i > start_idx:
+#         track.robust_step()
+#     else:
     track.step()
     print("one iteration takes:", time.time()-start)
 #     track.vis(save_dir="/home/yixuan/dart_deformable/result/LSLQP_rope_dataset_0105_no_occl_reg_comb_loss/", idx=i)
-    track.vis()
-```
-
-```python
-# DEBUG for simple tracking in real data for LSLQP with model-based obj fn
-H = 720
-W = 1280
-l = 40
-track = indi_pt_tracker(H, W, l, ratio=0.01, reg=True)
-
-i = 532
-
-q = np.array([[ 110.86675573,  574.30293958,  149.17771667,  562.80205824,
-        188.69614666,  568.99024793,  212.7846627 ,  600.92366923,
-        231.21223859,  636.42612614,  233.09494209,  676.38179442,
-        230.44660706,  716.29402716,  223.12542613,  755.61832384,
-        217.73616298,  795.25360917,  214.41808152,  835.11575081,
-        202.54900974,  873.31424731,  190.83452071,  911.56043336,
-        179.50823938,  949.92337578,  169.29130692,  988.59654854,
-        157.17141544, 1026.7162053 ,  147.29422398, 1065.47754029,
-        140.11067863, 1104.82721216,  132.91147946, 1144.17402311,
-        122.91909364, 1182.90582178]])
-q = q.reshape((19,2))
-# q = np.zeros((19,2))
-# q[:,0] = 420
-# q[:,1] = np.arange(40, l*(q.shape[0]-1)+41, l)
-track.set_init(q)
-data_path = "/home/yixuan/Downloads/rope_dataset_0105_no_marker/2022_01_05_17_59_17/2022_01_05_17_59_17/"
-rgb_np = cv2.imread(data_path+"realsense_overhead_5_l515_color/"+str(i)+".jpg")
-depth_np = cv2.imread(data_path+"realsense_overhead_5_l515_depth/"+str(i)+".png", cv2.IMREAD_ANYDEPTH)
-hsv_np = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2HSV)
-
-# mask image
-depth_mask = np.logical_and(depth_np < 1000, depth_np > 600)
-
-rope_min = np.array([0,75,200])
-rope_max = np.array([60,250,300])
-rope_mask = threshold(hsv_np, rope_min, rope_max)
-rope_mask = np.logical_and(rope_mask, depth_mask)
-
-track.set_obs(rope_mask, rgb_np, subsample=True)
-start = time.time()
-track.step(debug=False)
-print("one iteration takes:", time.time()-start)
-track.vis()
+    vis_img=track.draw_vis()
+    rope_mask = np.repeat(rope_mask[:, : ,None], 3, axis=2).astype(np.uint8)*255
+    stack_img = np.hstack((rope_mask, vis_img))
+    out.write(stack_img)
+out.release()
 ```
 
 ```python
@@ -899,10 +869,10 @@ imgs_to_video(path, start=0, end=251+1, img_ext='.png', img_prefix='frame')
 # output: different computation time and accuracy under different r, lam; scale of total loss, three loss terms; correpsonding video
 
 # ablation setting
-r_list = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
-lam_list = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 1e5]
-# r_list = [0.01]
-# lam_list = [1000]
+# r_list = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+# lam_list = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 1e5]
+r_list = [1.0]
+lam_list = [1000]
 out_dir = '/home/yixuan/dart_deformable/result/ablation/rope_simple_occlusion/'
 in_dir = '/home/yixuan/blender_data/rope_simple_occlusion/render/'
 pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -959,10 +929,10 @@ for r in r_list:
 # output: different computation time and accuracy under different r, lam; scale of total loss, three loss terms; correpsonding video
 
 # ablation setting
-r_list = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
-lam_list = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 1e5]
-# r_list = [0.01]
-# lam_list = [1000]
+# r_list = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+# lam_list = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 1e5]
+r_list = [0.1, 1.0]
+lam_list = [100, 1000, 10000, 1e5]
 out_dir = '/home/yixuan/dart_deformable/result/ablation/rope_simple/'
 in_dir = '/home/yixuan/blender_data/rope_simple/render/'
 pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -997,7 +967,10 @@ for r in r_list:
         #     if i >= 25:
         #         simple_tracker_sub.step(debug=True)
         #     else:
-            simple_tracker_sub.step(debug=False)
+            try:
+                simple_tracker_sub.step(debug=False)
+            except:
+                break
             total_time[i] = time.time()-start
             results[i] = simple_tracker_sub.p
             vis_img = simple_tracker_sub.draw_vis()
@@ -1013,15 +986,71 @@ for r in r_list:
 ```
 
 ```python
-a = np.ones((100))
-```
+# ablation study result processing
+# accuracy
+out_dir = '/home/yixuan/dart_deformable/result/ablation/rope_simple_occlusion/'
+data_path = '/home/yixuan/blender_data/rope_simple_occlusion/'
+gt_path = data_path + 'ground_truth.npy'
+cam_path = data_path + 'cam_info.txt'
+gt = np.load(gt_path)
+gt = gt + np.array([-0.5, 0.5, 0])[None, None, :]
+gt = np.hstack((gt,np.zeros((251, 1, 3)))) # for boundary indexing of interpolation
 
-```python
-b = np.ones((100))
-```
+# interpolate ground truth
+scale = np.arange(19)*49/18
+scale_int = np.floor(scale)
+scale_diff = (scale-scale_int)[None, :, None]
+gt_inter = gt[:, scale_int.astype(int), :] * (1-scale_diff) + gt[:, scale_int.astype(int)+1, :] * scale_diff
 
-```python
-(a == b).all()
+# convert to 2D
+K = np.loadtxt(cam_path)
+gt_inter_2d_homo = np.matmul(K[None, :, :], np.transpose(gt_inter, axes=(0,2,1)))
+gt_inter_2d = np.zeros((251, 19, 2))
+gt_inter_2d[:, :, 0] = gt_inter_2d_homo[:, 1, :]/gt_inter_2d_homo[:, 2, :]
+gt_inter_2d[:, :, 1] = gt_inter_2d_homo[:, 0, :]/gt_inter_2d_homo[:, 2, :]
+
+# read result
+r_list = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+lam_list = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 1e5]
+
+avg_time = np.zeros((10, 10))
+avg_error = np.zeros((10, 10))
+
+for r_idx, r in enumerate(r_list):
+    for lam_idx, lam in enumerate(lam_list):
+#         print('r:', r)
+#         print('lam:', lam)
+        time_path = out_dir + 'time_r_' + str(r) + '_lam_' + str(lam) + '.npy'
+        results_path = out_dir + 'results_r_' + str(r) + '_lam_' + str(lam) + '.npy'
+        try:
+            results = np.load(results_path)
+            times = np.load(time_path)
+        except:
+            print('NOT EXIST!')
+            avg_time[r_idx, lam_idx] = float('NaN')
+            avg_error[r_idx, lam_idx] = float('NaN')
+            continue
+        errors = np.linalg.norm(results-gt_inter_2d, axis=2).mean(axis=1)
+#         print('avg time:', time.mean())
+#         print('avg error:', errors.mean())
+        avg_time[r_idx, lam_idx] = times.mean()
+        avg_error[r_idx, lam_idx] = errors.mean()
+        lbl_str = 'r_' + str(r) + '_lam_' + str(lam)
+#         if r == 1e-2 and (lam == 1e2 or lam == 1e3 or lam == 1e4 or lam == 1e5):
+#             plt.plot(errors, label = lbl_str)
+        if lam == 1e3 and (r == 1e-3 or r == 1e-2 or r == 1e-1 or r ==1.0):
+            plt.plot(errors, label = lbl_str)
+
+plt.legend()
+plt.savefig(out_dir+"comp_r.png", dpi=300)
+plt.show()
+
+idx=np.array([0, 3, 6, 9])
+idx=idx.reshape((1,4)).repeat(4, axis=0)
+idx_h = idx.T.reshape(-1)
+idx_w = idx.reshape(-1)
+print(avg_time[idx_h, idx_w].reshape((4,4)))
+print(avg_error[idx_h, idx_w].reshape((4,4)))
 ```
 
 ```python
